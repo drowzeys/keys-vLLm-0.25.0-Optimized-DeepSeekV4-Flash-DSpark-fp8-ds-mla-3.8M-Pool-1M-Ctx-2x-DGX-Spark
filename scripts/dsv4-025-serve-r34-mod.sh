@@ -38,6 +38,18 @@ if [ "$PATCH_QATKV" = "1" ]; then
   PATCHMOUNT="$PATCHMOUNT -v $HOME/dsv4-025-patches/dspark_speculator.py:$VSPEC/dspark/speculator.py:ro -v $QD/dflash_speculator_eugr.py:$VSPEC/dflash/speculator.py:ro -v $QD/models_deepseek_v4_nvidia_dspark.py:/usr/local/lib/python3.12/dist-packages/vllm/models/deepseek_v4/nvidia/dspark.py:ro -v $HOME/dsv4-025-patches/sparse_swa_eugr.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/sparse_swa.py:ro"
   QATKVENV="-e VLLM_DSPARK_DRAFT_KV_BF16=1"
 fi
+# PATCH_FAST=1: DSpark FAST draft — stage-c persistent-ring perf path on top of the QATKV ring
+# (fused Triton ring attention, NO paged draft-KV writes, draft attn-metadata rebuild skipped).
+# Self-contained (includes cg clamps + SWA pad); do NOT combine with PATCH_QATKV / PATCH_DSPARK_EUGR.
+# FAST_TORCH=1: keep the fast path but use the torch-eager attention read (A/B the Triton kernels only).
+PATCH_FAST="${PATCH_FAST:-0}"; FASTENV=""
+if [ "$PATCH_FAST" = "1" ]; then
+  FD="$HOME/dsv4-025-patches/draft-fast"
+  VNVIDIA=/usr/local/lib/python3.12/dist-packages/vllm/models/deepseek_v4/nvidia
+  PATCHMOUNT="$PATCHMOUNT -v $HOME/dsv4-025-patches/dspark_speculator.py:$VSPEC/dspark/speculator.py:ro -v $FD/dflash_speculator_eugr.py:$VSPEC/dflash/speculator.py:ro -v $FD/models_deepseek_v4_nvidia_dspark.py:$VNVIDIA/dspark.py:ro -v $FD/dspark_fast_kernels.py:$VNVIDIA/dspark_fast_kernels.py:ro -v $HOME/dsv4-025-patches/sparse_swa_eugr.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/sparse_swa.py:ro"
+  FASTENV="-e VLLM_DSPARK_FAST_DRAFT=1"
+  [ "${FAST_TORCH:-0}" = "1" ] && FASTENV="$FASTENV -e VLLM_DSPARK_FAST_DRAFT_TORCH=1"
+fi
 # PATCH_CONF=1: stage-c confidence-head port (variable-length draft scheduling; the 60-67% accept lever).
 # REQUIRES sync scheduling (adds --no-async-scheduling). Includes the cg-clamp patches. EAGER=1 advised.
 PATCH_CONF="${PATCH_CONF:-0}"; CONF_THRESH="${CONF_THRESH:-0.4}"; CONF_SCHED="${CONF_SCHED:-threshold}"
@@ -79,7 +91,7 @@ docker run --gpus all -d --privileged --network host --ipc host --shm-size 10g \
   -e NCCL_IB_HCA=$HCA -e NCCL_IB_DISABLE=0 -e NCCL_IB_GID_INDEX=3 -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_DEBUG=WARN \
   -e HF_HUB_OFFLINE=1 \
   -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  $CONFENV $QATKVENV \
+  $CONFENV $QATKVENV $FASTENV \
   --entrypoint bash "$IMG" \
   -lc 'exec vllm serve /model \
     --served-model-name deepseek-v4-flash-dspark dsv4-dspark-025 \

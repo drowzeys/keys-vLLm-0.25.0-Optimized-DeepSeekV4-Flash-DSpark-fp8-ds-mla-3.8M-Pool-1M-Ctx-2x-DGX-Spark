@@ -59,8 +59,27 @@ fabric (ours: 200G RoCE, NCCL IB GID 3).
 > Acceptance-hypothesis ledger (why 55% is where it is): the checkpoint's `dspark_block_size`
 > is **5** — upstream's k=5 draft block already matches training exactly, closing the
 > block-size-mismatch theory; the anchor RoPE-position probe (P vs P+1) moved nothing.
-> Residual ideas toward the 0.24 compiled stack's 51-56 C1 mean: `nvfp4_ds_mla` 4-bit KV
-> (pool + decode-read bandwidth), QAT-parity bf16 draft-context KV, microbatch verifier.
+> QAT-parity bf16 draft-context KV (`patches/`… `PATCH_QATKV=1`): **also null** — 55.7%
+> acceptance, identical to fp8. The fp8 re-quantization of the draft's context KV was never
+> the gap.
+
+### Where the ceiling actually is (profiled): the two-node step cadence, not compute
+
+The final experiment transplanted the ENTIRE stage-c fast-draft design onto this stack
+(`patches/fast-draft-experimental/`, `PATCH_FAST=1`): per-request bf16 ring KV, stage-c's
+fused Triton non-causal ring attention (ported verbatim, validated to 1e-7 against the
+reference), zero paged draft-KV writes, and the per-step draft attention-metadata rebuild
+skipped entirely. It boots, captures graphs, passes the full gauntlet — **and lands at 42.0
+tok/s, statistically identical to the champion's 42.9.**
+
+py-spy explains it: the rank-0 worker spends **~45% of wall in `sched_yield`** waiting for the
+next RPC; the draft compute this patch eliminated (17% of wall) ran *inside* that idle window
+and was never on the critical path. Single-stream throughput on this topology is gated by the
+**MRV2 host→worker→NCCL step cadence across two nodes over RoCE**, not by draft or target
+kernels. Every mountable lever has now been tested: graphs (+30%, the real win), k∈{5,7},
+anchor position, block size, confidence scheduling, QAT KV parity, fast-draft kernels.
+**43 mean / 54 peak is the honest 0.25 ceiling on 2×GB10 TP=2 until the step loop itself gets
+faster** — that work lives in vLLM's runtime, not in bind-mounts.
 
 Serving recipe and measured benchmarks for **DeepSeek-V4-Flash-DSpark** (157 GB, NVIDIA's
 DSpark speculative-decoding release of DSV4-Flash) on **2× NVIDIA DGX Spark (GB10, sm_121a,
