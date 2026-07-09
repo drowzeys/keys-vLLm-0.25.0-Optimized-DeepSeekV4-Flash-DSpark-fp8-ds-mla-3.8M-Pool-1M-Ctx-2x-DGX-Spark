@@ -11,7 +11,10 @@ Used by `scripts/dsv4-nvfp4-1m-serve.sh` for the **nvfp4_ds_mla + B12X** recipe.
 | Size | ~22.7 GB |
 | Created | 2026-07-01 |
 | Engine banner | `v0.21.1rc1.dev339+g1967a5627bc3` |
-| GHCR | `ghcr.io/drowzeys/vllm-dspark-nvfp4-stage-c:gb10` (also `:latest`) |
+| GHCR tags | `ghcr.io/drowzeys/vllm-dspark-nvfp4-stage-c:gb10` · `:latest` |
+| GHCR digest | `sha256:f3b0577bfec41ac2cece2cbe0c4a9be934d9d4f18c50bbcdd602848da2499fb8` |
+| Package page | https://github.com/users/drowzeys/packages/container/package/vllm-dspark-nvfp4-stage-c |
+| Visibility | **private** by default (GHCR); `docker login ghcr.io` with a PAT that has `read:packages` |
 
 ## What it is
 
