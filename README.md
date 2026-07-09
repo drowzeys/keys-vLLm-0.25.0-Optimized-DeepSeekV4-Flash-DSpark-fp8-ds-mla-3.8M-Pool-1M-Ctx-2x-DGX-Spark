@@ -20,6 +20,12 @@
 > 0.24 stack's confidence-head draft-length scheduler lives in `patches/confidence-experimental/`
 > — it raises acceptance to 74-78% but requires `--no-async-scheduling`, which costs more than
 > the pruning saves (39.0 mean w/ graphs): educational, not recommended for serving.
+>
+> Acceptance-hypothesis ledger (why 55% is where it is): the checkpoint's `dspark_block_size`
+> is **5** — upstream's k=5 draft block already matches training exactly, closing the
+> block-size-mismatch theory; the anchor RoPE-position probe (P vs P+1) moved nothing.
+> Residual ideas toward the 0.24 compiled stack's 51-56 C1 mean: `nvfp4_ds_mla` 4-bit KV
+> (pool + decode-read bandwidth), QAT-parity bf16 draft-context KV, microbatch verifier.
 
 Serving recipe and measured benchmarks for **DeepSeek-V4-Flash-DSpark** (157 GB, NVIDIA's
 DSpark speculative-decoding release of DSV4-Flash) on **2× NVIDIA DGX Spark (GB10, sm_121a,
