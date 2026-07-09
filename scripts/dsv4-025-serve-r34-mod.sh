@@ -15,6 +15,33 @@ EAGER="${EAGER:-0}"; PATCH_SWA="${PATCH_SWA:-0}"
 EAGERARG=""; [ "$EAGER" = "1" ] && EAGERARG="--enforce-eager"
 CC_MODE="${CC_MODE:-}"; [ "$EAGER" != "1" ] && [ -n "$CC_MODE" ] && EAGERARG="-cc.cudagraph_mode=$CC_MODE"
 PATCHMOUNT=""; [ "$PATCH_SWA" = "1" ] && PATCHMOUNT="-v $HOME/dsv4-025-patches/sparse_swa.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/sparse_swa.py:ro"
+# PATCH_DSPARK=1: graph-safety fixes for the MRV2 DSpark draft (clamp Markov feedback ids,
+# pad-row input_id hygiene) — the [-1] draft corruption under CG replay (see repo Wall 2).
+PATCH_DSPARK="${PATCH_DSPARK:-0}"
+VSPEC=/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/spec_decode
+[ "$PATCH_DSPARK" = "1" ] && PATCHMOUNT="$PATCHMOUNT -v $HOME/dsv4-025-patches/dspark_speculator.py:$VSPEC/dspark/speculator.py:ro -v $HOME/dsv4-025-patches/dflash_speculator.py:$VSPEC/dflash/speculator.py:ro"
+# PATCH_ANCHOR=1: anchor RoPE-position probe (DeepSpec convention: anchor AT last verified pos).
+# Overrides the dflash mount; implies the graph-safety patches too. (Probe result: no accept change.)
+PATCH_ANCHOR="${PATCH_ANCHOR:-0}"
+[ "$PATCH_ANCHOR" = "1" ] && PATCHMOUNT="$PATCHMOUNT -v $HOME/dsv4-025-patches/dspark_speculator.py:$VSPEC/dspark/speculator.py:ro -v $HOME/dsv4-025-patches/dflash_speculator_anchor.py:$VSPEC/dflash/speculator.py:ro"
+# PATCH_DSPARK_EUGR=1: cg-clamp patches rebased onto the eugr/spark-vllm image's sources
+# (dspark speculator identical across images; dflash has 2 trivial API diffs). No sparse_swa
+# mount — eugr's build carries its own 512-width table.
+PATCH_DSPARK_EUGR="${PATCH_DSPARK_EUGR:-0}"
+[ "$PATCH_DSPARK_EUGR" = "1" ] && PATCHMOUNT="$PATCHMOUNT -v $HOME/dsv4-025-patches/dspark_speculator.py:$VSPEC/dspark/speculator.py:ro -v $HOME/dsv4-025-patches/dflash_speculator_eugr.py:$VSPEC/dflash/speculator.py:ro -v $HOME/dsv4-025-patches/sparse_swa_eugr.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/sparse_swa.py:ro"
+# PATCH_CONF=1: stage-c confidence-head port (variable-length draft scheduling; the 60-67% accept lever).
+# REQUIRES sync scheduling (adds --no-async-scheduling). Includes the cg-clamp patches. EAGER=1 advised.
+PATCH_CONF="${PATCH_CONF:-0}"; CONF_THRESH="${CONF_THRESH:-0.4}"; CONF_SCHED="${CONF_SCHED:-threshold}"
+NOASYNC=""
+if [ "$PATCH_CONF" != "0" ]; then
+  CD="$HOME/dsv4-025-patches/confidence"
+  # eugr variant also needs the SWA width-pad (do NOT combine with PATCH_DSPARK_EUGR — duplicate mounts)
+  [ "$PATCH_CONF" = "eugr" ] && { CD="$HOME/dsv4-025-patches/confidence-eugr"; PATCHMOUNT="$PATCHMOUNT -v $HOME/dsv4-025-patches/sparse_swa_eugr.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/sparse_swa.py:ro"; }
+  PATCHMOUNT="$PATCHMOUNT -v $CD/dspark_confidence.py:$VSPEC/dspark/confidence.py:ro -v $CD/dspark_speculator.py:$VSPEC/dspark/speculator.py:ro -v $CD/dflash_speculator.py:$VSPEC/dflash/speculator.py:ro -v $CD/spec_decode_utils.py:$VSPEC/utils.py:ro -v $CD/model_runner.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/worker/gpu/model_runner.py:ro -v $CD/model_dspark.py:/usr/local/lib/python3.12/dist-packages/vllm/models/deepseek_v4/nvidia/dspark.py:ro"
+  NOASYNC="--no-async-scheduling"
+  CONFENV="-e VLLM_DSPARK_CONFIDENCE_THRESHOLD=$CONF_THRESH -e VLLM_DSPARK_CONFIDENCE_SCHEDULER=$CONF_SCHED -e VLLM_DSPARK_CONFIDENCE_LOG_EVERY=200"
+fi
+CONFENV="${CONFENV:-}"
 MODELDIR="$HOME/models/dsv4-flash-dspark"
 SELF=$(ip -4 addr show $IF 2>/dev/null|awk '/inet /{print $2}'|cut -d/ -f1); SELF=${SELF:-$MASTER}
 HEADLESS=""; [ "$RANK" != "0" ] && HEADLESS="--headless"
@@ -43,6 +70,7 @@ docker run --gpus all -d --privileged --network host --ipc host --shm-size 10g \
   -e NCCL_IB_HCA=$HCA -e NCCL_IB_DISABLE=0 -e NCCL_IB_GID_INDEX=3 -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_DEBUG=WARN \
   -e HF_HUB_OFFLINE=1 \
   -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+  $CONFENV \
   --entrypoint bash "$IMG" \
   -lc 'exec vllm serve /model \
     --served-model-name deepseek-v4-flash-dspark dsv4-dspark-025 \
@@ -51,7 +79,7 @@ docker run --gpus all -d --privileged --network host --ipc host --shm-size 10g \
     --kv-cache-dtype '"$KVD"' \
     --max-model-len '"$MAXLEN"' --max-num-seqs '"$SEQS"' \
     --gpu-memory-utilization '"$GMU"' \
-    --generation-config vllm --no-enable-prefix-caching '"$EAGERARG"' \
+    --generation-config vllm --no-enable-prefix-caching '"$EAGERARG"' '"$NOASYNC"' \
     --enable-auto-tool-choice --tool-call-parser deepseek_v4 \
     '"$SPECARG"' \
     --distributed-executor-backend mp \

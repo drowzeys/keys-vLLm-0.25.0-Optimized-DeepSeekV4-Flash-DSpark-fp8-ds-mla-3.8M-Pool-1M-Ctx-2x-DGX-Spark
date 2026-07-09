@@ -1,4 +1,25 @@
-# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — upstream vLLM 0.25, 33 tok/s C1, 1M context + tool calling, one 30-line patch
+# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — vLLM 0.25 line, 43 tok/s C1 mean (54 peak) with FULL CUDA graphs, 1M context + tool calling
+
+> **2026-07-09 CHAMPION CONFIG — graphs unlocked.** The sm_121a graph-replay wedge (Wall 2)
+> turned out to be the **upstream nightly image's GB10 binaries**, not vLLM code: the same vLLM
+> generation built GB10-native (`eugr/spark-vllm:latest`, playbook lineage) replays FULL CUDA
+> graphs correctly. On that image + two tiny draft-path clamps, graphs + DSpark k=5 run stable:
+> **C1 mean 42.9 / peak 54.4 tok/s (12/12 sustained gauntlet), C4 61 / C8 92 / C12 116.5 agg,
+> acceptance 55.5%, 3.08M-token KV pool @ 1M ctx.** That is +30% single-stream and +69% @C12
+> over the eager stock-nightly numbers below (which remain valid for the stock image).
+>
+> ```bash
+> IMG=eugr/spark-vllm:latest SPEC=dspark EAGER=0 PATCH_DSPARK_EUGR=1 GMU=0.82 SEQS=12 \
+>   bash scripts/dsv4-025-serve-r34-mod.sh <rank>   # rank 1 (worker) first
+> ```
+> `GMU=0.82`, not 0.85: FULL+PIECEWISE capture needs ~3.5 GB headroom on 128 GB unified —
+> 0.85 gets the rank SIGKILLed mid-capture. Patches (`patches/eugr-graphs/`): the Wall-1
+> width-pad rebased onto eugr's sparse_swa, plus two graph-safety clamps for the sequential
+> Markov draft (pad-row ids flow into an embedding gather under replay — clamp them; see
+> Wall 2 update). k=7 probe: net loss (40.5 mean, 43% accept). An experimental port of the
+> 0.24 stack's confidence-head draft-length scheduler lives in `patches/confidence-experimental/`
+> — it raises acceptance to 74-78% but requires `--no-async-scheduling`, which costs more than
+> the pruning saves (39.0 mean w/ graphs): educational, not recommended for serving.
 
 Serving recipe and measured benchmarks for **DeepSeek-V4-Flash-DSpark** (157 GB, NVIDIA's
 DSpark speculative-decoding release of DSV4-Flash) on **2× NVIDIA DGX Spark (GB10, sm_121a,
