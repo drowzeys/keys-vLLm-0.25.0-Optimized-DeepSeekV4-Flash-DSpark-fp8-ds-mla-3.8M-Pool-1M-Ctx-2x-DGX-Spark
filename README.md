@@ -1,4 +1,4 @@
-# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — upstream vLLM 0.25, 33 tok/s C1, one 30-line patch
+# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — upstream vLLM 0.25, 33 tok/s C1, 1M context + tool calling, one 30-line patch
 
 Serving recipe and measured benchmarks for **DeepSeek-V4-Flash-DSpark** (157 GB, NVIDIA's
 DSpark speculative-decoding release of DSV4-Flash) on **2× NVIDIA DGX Spark (GB10, sm_121a,
@@ -23,6 +23,7 @@ This retires the entire 0.24-era transplant stack (17-file overlay + hand-swappe
 | C16 aggregate (16× 256 tok, temp 0.7) | 69.0 tok/s (0.24 port: 77–106 — see graphs note) |
 | DSpark acceptance | **42.0%** @ temp 0 (2.10 tok/draft) · 29.7% @ temp 0.7 under batch |
 | KV pool | **2,838,963 tokens** @ 256K max ctx, GMU 0.85 |
+| KV pool, **1M standing config** | **3,848,951 tokens** @ 1M max ctx, GMU 0.85 (~3.7× full-length seqs) |
 | Coherence | ✓ all runs (base model: corpus-style continuations on bare prompts, clean prose in chat-shaped contexts) |
 
 ![DSpark speedup](charts/dspark-speedup.png)
@@ -85,12 +86,25 @@ IMG=vllm-dsv4-025:fi614 SPEC=dspark EAGER=1 PATCH_SWA=1 bash scripts/dsv4-025-se
 IMG=vllm-dsv4-025:fi614 SPEC=dspark EAGER=1 PATCH_SWA=1 bash scripts/dsv4-025-serve-r34-mod.sh 0
 ```
 
-Default context is now **1M tokens** (`MAXLEN=1048576` — the model's native yarn limit,
-`max_position_embeddings: 1048576`; the 2.84M-token KV pool fits a full 1M sequence with room
-to spare), and the serve exposes **OpenAI tool calling**
-(`--enable-auto-tool-choice --tool-call-parser deepseek_v4`) so agent gateways with
-`tool_choice: auto` work out of the box. Benchmarks in this README were measured at
-`MAXLEN=262144` before these flags — decode speed is unaffected by either.
+### The 1M standing config (measured, verified in production)
+
+Default context is **1M tokens** (`MAXLEN=1048576` — the model's native yarn limit,
+`max_position_embeddings: 1048576`). Measured at boot: **KV pool 3,848,951 tokens** @ GMU 0.85 —
+a full 1M-token sequence fits ~3.7× over. The serve exposes **OpenAI tool calling**
+(`--enable-auto-tool-choice --tool-call-parser deepseek_v4`), verified end-to-end: structured
+`tool_calls` come back clean, and a hermes agent gateway drives shell tools through it with
+`tool_choice: auto` out of the box.
+
+**Decode speed is unaffected by the 1M reservation** — measured on the live 1M server (C1,
+256-tok, temp 0, warm): code **32–37 tok/s**, JSON **~31 tok/s**, prose **~20 tok/s**, DSpark
+acceptance 48.5% (k=5). Same acceptance-dependent band as the 256K bench above. First request
+on a cold path can be ~5× slower (JIT warmup) — throw one warmup request before measuring.
+
+**Ops rule that bites (both failure modes hit in practice):** launch only on *verified-clean*
+nodes. A node with ~75 GB of stale state (page cache + dead NCCL peers) passes weight load and
+then dies silently in sparse-MLA warmup (exit 255, no OOM flag). The launcher's 95G-available
+guard catches the first case; a container racing you onto the node *between* the guard and the
+launch still kills it — re-check `docker ps` if rank0 aborts with a free-memory `ValueError`.
 
 `PATCH_SWA=1` bind-mounts `patches/sparse_swa.py` over
 `vllm/v1/attention/backends/mla/sparse_swa.py`. Knobs: `SPEC(dspark|none)`, `SPEC_TOKENS(5)`,
@@ -103,7 +117,8 @@ fabric (ours: 200G RoCE, NCCL IB GID 3).
 |---|---|
 | `--enforce-eager` | **mandatory** — Wall 2; the sm_121a full decode graph wedges the worker |
 | `--speculative-config '{"method":"dspark","num_speculative_tokens":5}'` | upstream-native DSpark (forces Model-Runner-V2) |
-| `--kv-cache-dtype fp8_ds_mla` | 2.84M-token KV pool at 256K ctx / GMU 0.85 |
+| `--kv-cache-dtype fp8_ds_mla` | 3.85M-token KV pool at 1M ctx / GMU 0.85 (2.84M @ 256K) |
+| `--enable-auto-tool-choice --tool-call-parser deepseek_v4` | OpenAI tool calling, verified with hermes agent gateway |
 | `--gpu-memory-utilization 0.85` | house rule for 128 GB unified GB10; higher risks OOM-livelock |
 | `--no-enable-prefix-caching` | as benched |
 | `--enable-auto-tool-choice --tool-call-parser deepseek_v4` | OpenAI tool calling for agent gateways |

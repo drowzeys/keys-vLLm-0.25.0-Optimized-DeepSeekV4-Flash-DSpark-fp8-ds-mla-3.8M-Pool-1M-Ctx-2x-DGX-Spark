@@ -3,7 +3,7 @@
 # stock FLASHINFER_MLA_SPARSE_SM120 + DeepGEMM family-120. Retires vllm-dspark024:gb10 transplant stack.
 # TP=2 across .1 (rank0, API :8000) + .2 (rank1 headless). Launch rank1 FIRST, then rank0.
 # Usage: dsv4-025-serve.sh <rank 0|1>
-# Knobs: SPEC(dspark|none) SPEC_TOKENS(5) SEQS(16) MAXLEN(262144) KVD(fp8_ds_mla) GMU(0.85) IMG
+# Knobs: SPEC(dspark|none) SPEC_TOKENS(5) SEQS(16) MAXLEN(1048576) KVD(fp8_ds_mla) GMU(0.85) IMG
 set -uo pipefail
 RANK="${1:?usage: dsv4-025-serve.sh <rank 0|1>}"
 MASTER=10.100.10.3; PORT=29551; IF=enp1s0f1np1; HCA=rocep1s0f1
