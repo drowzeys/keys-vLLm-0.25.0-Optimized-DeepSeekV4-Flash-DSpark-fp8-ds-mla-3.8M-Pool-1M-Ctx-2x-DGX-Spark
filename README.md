@@ -1,4 +1,4 @@
-# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — nvfp4_ds_mla 1M + B12X (~50–58 C1) · eugr graphs 43 C1
+# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — nvfp4_ds_mla 1M + B12X (~44–58 C1) · eugr graphs 43 C1
 
 ![nvfp4 1M C1 ladder](charts/nvfp4-1m-c1-ladder.png)
 
@@ -6,10 +6,15 @@ Two production recipes live in this repo:
 
 | recipe | image | C1 (pure / reported) | KV @ 1M | tools |
 |---|---|---|---|---|
-| **⭐ speed + pool (2026-07-09 late)** | `vllm-dspark-runtime:dspark-nvfp4-stage-c` | **~50–56 mean / ~58 peak pure** | **2.50M tok** (`nvfp4_ds_mla`) | ✓ |
+| **⭐ speed + pool (2026-07-09)** | [`ghcr.io/drowzeys/vllm-dspark-nvfp4-stage-c:gb10`](image/STAGE-C.md) | **~44–56 mean / ~58 peak pure** | **2.50M tok** (`nvfp4_ds_mla`) | ✓ |
 | 0.25-line de-fork (eugr graphs) | `eugr/spark-vllm:latest` | 42.9 mean / 54.4 peak | 3.08M tok (`fp8_ds_mla`) | ✓ |
 
-Full numbers, accuracy caveat, and methodology: **[RESULTS-nvfp4-1m.md](RESULTS-nvfp4-1m.md)**.
+| docs | |
+|---|---|
+| **Full numbers + accuracy** | [RESULTS-nvfp4-1m.md](RESULTS-nvfp4-1m.md) |
+| **Image / build / GHCR** | [image/STAGE-C.md](image/STAGE-C.md) |
+| **Bench script + raw evals** | [benchmarks/](benchmarks/) · [Session C json](benchmarks/results/2026-07-09T2319Z-nvfp4-1m-session-c.json) |
+| **Serve launcher** | [scripts/dsv4-nvfp4-1m-serve.sh](scripts/dsv4-nvfp4-1m-serve.sh) |
 
 ---
 
@@ -24,15 +29,17 @@ Measured on this cluster (2× GB10 TP=2, RoCE):
 | max context | **1,048,576** |
 | KV pool | **2,500,107 tokens** (~2.38× full 1M) |
 | C1 pure decode (best session) | **mean 56.2 / peak 58.5 tok/s** |
-| C1 pure (publish re-measure) | **mean 50.1 / peak 51.5 tok/s** · accept ~66% |
-| C4 aggregate | **~65 tok/s** |
+| C1 pure (Session B re-measure) | **mean 50.1 / peak 51.5 tok/s** · accept ~66% |
+| C1 pure (Session C publish package) | **mean 43.6 / peak 56.6 tok/s** · code peaks 56.6 |
+| C4 aggregate | **~64–65 tok/s** |
 | tools | ✓ structured `tool_calls` |
-| math smoke | easy ✓ · hard 847×293 **digit-sensitive** (see caveat) |
+| math smoke (Session C) | **5/5 ✓** including `847×293=248171` (A/B hard-math was flaky — see caveat) |
 
 ```bash
-# 0. Image on BOTH nodes (local tag or GHCR if published):
-#    docker pull ghcr.io/drowzeys/vllm-dspark-nvfp4-stage-c:gb10
-#    docker tag  ghcr.io/drowzeys/vllm-dspark-nvfp4-stage-c:gb10 vllm-dspark-runtime:dspark-nvfp4-stage-c
+# 0. Image on BOTH nodes:
+docker pull ghcr.io/drowzeys/vllm-dspark-nvfp4-stage-c:gb10
+docker tag  ghcr.io/drowzeys/vllm-dspark-nvfp4-stage-c:gb10 \
+  vllm-dspark-runtime:dspark-nvfp4-stage-c
 #    # OR use the pre-built local tag from the stage-c / tonyd2wild lineage
 
 # 1. Checkpoint (~157 GB) at ~/models/dsv4-flash-dspark on BOTH nodes
@@ -41,11 +48,15 @@ Measured on this cluster (2× GB10 TP=2, RoCE):
 # 3. Worker (rank 1) FIRST, then head (rank 0, API :8000):
 bash scripts/dsv4-nvfp4-1m-serve.sh 1
 bash scripts/dsv4-nvfp4-1m-serve.sh 0
+
+# 4. After "Application startup complete":
+python3 benchmarks/bench_eval.py --api http://<rank0-ip>:8000/v1
 ```
 
-**Accuracy caveat:** the engine logs that `nvfp4_ds_mla` *may cause accuracy drop without a proper scaling factor*. Hard multiplies can be off by small digit errors while tools/code remain coherent. Dual-run critical numeric jobs on the eugr `fp8_ds_mla` config if you need bit-stable arithmetic.
+**Accuracy caveat:** the engine logs that `nvfp4_ds_mla` *may cause accuracy drop without a proper scaling factor*. Hard multiplies passed in Session C but failed with small digit errors in Sessions A/B. Tools/code remain coherent. Dual-run critical numeric jobs on the eugr `fp8_ds_mla` config if you need bit-stable arithmetic.
 
 ![KV pool](charts/nvfp4-1m-kv-pool.png)
+![Session C C1](charts/nvfp4-1m-session-c.png)
 
 ---
 
