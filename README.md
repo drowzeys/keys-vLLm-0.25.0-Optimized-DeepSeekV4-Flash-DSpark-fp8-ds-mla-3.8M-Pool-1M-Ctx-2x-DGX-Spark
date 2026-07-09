@@ -1,10 +1,57 @@
-# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — FULL CUDA graphs, 43 tok/s C1 (54 peak), C12 116 agg, 1M context + tool calling
+# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — nvfp4_ds_mla 1M + B12X (~50–58 C1) · eugr graphs 43 C1
 
-![Config evolution](charts/config-evolution-graphs.png)
+![nvfp4 1M C1 ladder](charts/nvfp4-1m-c1-ladder.png)
 
-## Quick start — the latest optimization, step by step
+Two production recipes live in this repo:
 
-Reproduces the champion config (measured 2026-07-09): **C1 mean 42.9 / peak 54.4 tok/s,
+| recipe | image | C1 (pure / reported) | KV @ 1M | tools |
+|---|---|---|---|---|
+| **⭐ speed + pool (2026-07-09 late)** | `vllm-dspark-runtime:dspark-nvfp4-stage-c` | **~50–56 mean / ~58 peak pure** | **2.50M tok** (`nvfp4_ds_mla`) | ✓ |
+| 0.25-line de-fork (eugr graphs) | `eugr/spark-vllm:latest` | 42.9 mean / 54.4 peak | 3.08M tok (`fp8_ds_mla`) | ✓ |
+
+Full numbers, accuracy caveat, and methodology: **[RESULTS-nvfp4-1m.md](RESULTS-nvfp4-1m.md)**.
+
+---
+
+## Quick start A — 1M nvfp4_ds_mla + B12X (speed champion)
+
+Stage-c / aidendle–tonyd lineage: DSpark k=5, **B12X Mxfp4 MoE**, **`kv_cache_dtype=nvfp4_ds_mla`**, FULL CUDA graphs, `max_model_len=1048576`, `seqs=12`, `GMU=0.82`.
+
+Measured on this cluster (2× GB10 TP=2, RoCE):
+
+| metric | value |
+|---|---|
+| max context | **1,048,576** |
+| KV pool | **2,500,107 tokens** (~2.38× full 1M) |
+| C1 pure decode (best session) | **mean 56.2 / peak 58.5 tok/s** |
+| C1 pure (publish re-measure) | **mean 50.1 / peak 51.5 tok/s** · accept ~66% |
+| C4 aggregate | **~65 tok/s** |
+| tools | ✓ structured `tool_calls` |
+| math smoke | easy ✓ · hard 847×293 **digit-sensitive** (see caveat) |
+
+```bash
+# 0. Image on BOTH nodes (local tag or GHCR if published):
+#    docker pull ghcr.io/drowzeys/vllm-dspark-nvfp4-stage-c:gb10
+#    docker tag  ghcr.io/drowzeys/vllm-dspark-nvfp4-stage-c:gb10 vllm-dspark-runtime:dspark-nvfp4-stage-c
+#    # OR use the pre-built local tag from the stage-c / tonyd2wild lineage
+
+# 1. Checkpoint (~157 GB) at ~/models/dsv4-flash-dspark on BOTH nodes
+
+# 2. Edit MASTER/IF/HCA in scripts/dsv4-nvfp4-1m-serve.sh for your fabric
+# 3. Worker (rank 1) FIRST, then head (rank 0, API :8000):
+bash scripts/dsv4-nvfp4-1m-serve.sh 1
+bash scripts/dsv4-nvfp4-1m-serve.sh 0
+```
+
+**Accuracy caveat:** the engine logs that `nvfp4_ds_mla` *may cause accuracy drop without a proper scaling factor*. Hard multiplies can be off by small digit errors while tools/code remain coherent. Dual-run critical numeric jobs on the eugr `fp8_ds_mla` config if you need bit-stable arithmetic.
+
+![KV pool](charts/nvfp4-1m-kv-pool.png)
+
+---
+
+## Quick start B — eugr 0.25-line graphs (de-fork champion)
+
+Reproduces the bind-mount graphs config: **C1 mean 42.9 / peak 54.4 tok/s,
 C4 61 / C8 92 / C12 116.5 aggregate, acceptance 55.5%, 1M context, OpenAI tool calling.**
 
 ```bash
@@ -30,6 +77,7 @@ from feeding pad-row ids into an embedding gather under graph replay (the `[-1]`
 0.85 gets the rank SIGKILLed mid-capture. Adjust `MASTER`/`IF`/`HCA` in the launcher to your
 fabric (ours: 200G RoCE, NCCL IB GID 3).
 
+![Config evolution](charts/config-evolution-graphs.png)
 ![Concurrency scaling](charts/concurrency-scaling.png)
 ![Acceptance ledger](charts/acceptance-ledger.png)
 
