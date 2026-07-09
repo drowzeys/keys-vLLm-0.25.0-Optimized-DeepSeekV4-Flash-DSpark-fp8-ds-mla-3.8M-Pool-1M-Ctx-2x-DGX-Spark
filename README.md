@@ -85,9 +85,16 @@ IMG=vllm-dsv4-025:fi614 SPEC=dspark EAGER=1 PATCH_SWA=1 bash scripts/dsv4-025-se
 IMG=vllm-dsv4-025:fi614 SPEC=dspark EAGER=1 PATCH_SWA=1 bash scripts/dsv4-025-serve-r34-mod.sh 0
 ```
 
+Default context is now **1M tokens** (`MAXLEN=1048576` — the model's native yarn limit,
+`max_position_embeddings: 1048576`; the 2.84M-token KV pool fits a full 1M sequence with room
+to spare), and the serve exposes **OpenAI tool calling**
+(`--enable-auto-tool-choice --tool-call-parser deepseek_v4`) so agent gateways with
+`tool_choice: auto` work out of the box. Benchmarks in this README were measured at
+`MAXLEN=262144` before these flags — decode speed is unaffected by either.
+
 `PATCH_SWA=1` bind-mounts `patches/sparse_swa.py` over
 `vllm/v1/attention/backends/mla/sparse_swa.py`. Knobs: `SPEC(dspark|none)`, `SPEC_TOKENS(5)`,
-`SEQS(16)`, `MAXLEN(262144)`, `KVD(fp8_ds_mla)`, `GMU(0.85)`. Adjust `MASTER`/`IF`/`HCA` to your
+`SEQS(16)`, `MAXLEN(1048576)`, `KVD(fp8_ds_mla)`, `GMU(0.85)`. Adjust `MASTER`/`IF`/`HCA` to your
 fabric (ours: 200G RoCE, NCCL IB GID 3).
 
 ### 4. Flags that matter
@@ -99,6 +106,7 @@ fabric (ours: 200G RoCE, NCCL IB GID 3).
 | `--kv-cache-dtype fp8_ds_mla` | 2.84M-token KV pool at 256K ctx / GMU 0.85 |
 | `--gpu-memory-utilization 0.85` | house rule for 128 GB unified GB10; higher risks OOM-livelock |
 | `--no-enable-prefix-caching` | as benched |
+| `--enable-auto-tool-choice --tool-call-parser deepseek_v4` | OpenAI tool calling for agent gateways |
 
 ### 5. Operational guardrails (unified-memory Sparks)
 

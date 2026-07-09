@@ -9,7 +9,7 @@ RANK="${1:?usage: dsv4-025-serve.sh <rank 0|1>}"
 MASTER=10.100.10.3; PORT=29551; IF=enp1s0f1np1; HCA=rocep1s0f1
 IMG="${IMG:-vllm/vllm-openai:nightly-aarch64}"
 SPEC="${SPEC:-dspark}"; SPEC_TOKENS="${SPEC_TOKENS:-5}"
-SEQS="${SEQS:-16}"; MAXLEN="${MAXLEN:-262144}"; KVD="${KVD:-fp8_ds_mla}"; GMU="${GMU:-0.85}"
+SEQS="${SEQS:-16}"; MAXLEN="${MAXLEN:-1048576}"; KVD="${KVD:-fp8_ds_mla}"; GMU="${GMU:-0.85}"
 EAGER="${EAGER:-0}"; PATCH_SWA="${PATCH_SWA:-0}"
 EAGERARG=""; [ "$EAGER" = "1" ] && EAGERARG="--enforce-eager"
 PATCHMOUNT=""; [ "$PATCH_SWA" = "1" ] && PATCHMOUNT="-v $HOME/dsv4-025-patches/sparse_swa.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/sparse_swa.py:ro"
@@ -50,6 +50,7 @@ docker run --gpus all -d --privileged --network host --ipc host --shm-size 10g \
     --max-model-len '"$MAXLEN"' --max-num-seqs '"$SEQS"' \
     --gpu-memory-utilization '"$GMU"' \
     --generation-config vllm --no-enable-prefix-caching '"$EAGERARG"' \
+    --enable-auto-tool-choice --tool-call-parser deepseek_v4 \
     '"$SPECARG"' \
     --distributed-executor-backend mp \
     --nnodes 2 --node-rank '"$RANK"' --master-addr '"$MASTER"' --master-port '"$PORT"' '"$HEADLESS"''
