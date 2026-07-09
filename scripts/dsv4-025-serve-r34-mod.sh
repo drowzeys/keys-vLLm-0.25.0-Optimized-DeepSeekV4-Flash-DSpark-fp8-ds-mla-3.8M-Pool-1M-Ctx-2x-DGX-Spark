@@ -29,6 +29,15 @@ PATCH_ANCHOR="${PATCH_ANCHOR:-0}"
 # mount — eugr's build carries its own 512-width table.
 PATCH_DSPARK_EUGR="${PATCH_DSPARK_EUGR:-0}"
 [ "$PATCH_DSPARK_EUGR" = "1" ] && PATCHMOUNT="$PATCHMOUNT -v $HOME/dsv4-025-patches/dspark_speculator.py:$VSPEC/dspark/speculator.py:ro -v $HOME/dsv4-025-patches/dflash_speculator_eugr.py:$VSPEC/dflash/speculator.py:ro -v $HOME/dsv4-025-patches/sparse_swa_eugr.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/sparse_swa.py:ro"
+# PATCH_QATKV=1: stage-c QAT KV parity — bf16 per-request ring buffer feeds the draft instead of the
+# re-quantized fp8 paged cache (acceptance lever; self-contained: includes cg clamps + SWA pad; do NOT
+# combine with PATCH_DSPARK_EUGR). eugr image only.
+PATCH_QATKV="${PATCH_QATKV:-0}"; QATKVENV=""
+if [ "$PATCH_QATKV" = "1" ]; then
+  QD="$HOME/dsv4-025-patches/draftkv-bf16"
+  PATCHMOUNT="$PATCHMOUNT -v $HOME/dsv4-025-patches/dspark_speculator.py:$VSPEC/dspark/speculator.py:ro -v $QD/dflash_speculator_eugr.py:$VSPEC/dflash/speculator.py:ro -v $QD/models_deepseek_v4_nvidia_dspark.py:/usr/local/lib/python3.12/dist-packages/vllm/models/deepseek_v4/nvidia/dspark.py:ro -v $HOME/dsv4-025-patches/sparse_swa_eugr.py:/usr/local/lib/python3.12/dist-packages/vllm/v1/attention/backends/mla/sparse_swa.py:ro"
+  QATKVENV="-e VLLM_DSPARK_DRAFT_KV_BF16=1"
+fi
 # PATCH_CONF=1: stage-c confidence-head port (variable-length draft scheduling; the 60-67% accept lever).
 # REQUIRES sync scheduling (adds --no-async-scheduling). Includes the cg-clamp patches. EAGER=1 advised.
 PATCH_CONF="${PATCH_CONF:-0}"; CONF_THRESH="${CONF_THRESH:-0.4}"; CONF_SCHED="${CONF_SCHED:-threshold}"
@@ -70,7 +79,7 @@ docker run --gpus all -d --privileged --network host --ipc host --shm-size 10g \
   -e NCCL_IB_HCA=$HCA -e NCCL_IB_DISABLE=0 -e NCCL_IB_GID_INDEX=3 -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_DEBUG=WARN \
   -e HF_HUB_OFFLINE=1 \
   -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  $CONFENV \
+  $CONFENV $QATKVENV \
   --entrypoint bash "$IMG" \
   -lc 'exec vllm serve /model \
     --served-model-name deepseek-v4-flash-dspark dsv4-dspark-025 \

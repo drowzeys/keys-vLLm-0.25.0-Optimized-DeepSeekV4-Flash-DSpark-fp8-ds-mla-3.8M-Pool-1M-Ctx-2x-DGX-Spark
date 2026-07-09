@@ -1,4 +1,39 @@
-# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — vLLM 0.25 line, 43 tok/s C1 mean (54 peak) with FULL CUDA graphs, 1M context + tool calling
+# DeepSeek-V4-Flash-DSpark on 2× DGX Spark — FULL CUDA graphs, 43 tok/s C1 (54 peak), C12 116 agg, 1M context + tool calling
+
+![Config evolution](charts/config-evolution-graphs.png)
+
+## Quick start — the latest optimization, step by step
+
+Reproduces the champion config (measured 2026-07-09): **C1 mean 42.9 / peak 54.4 tok/s,
+C4 61 / C8 92 / C12 116.5 aggregate, acceptance 55.5%, 1M context, OpenAI tool calling.**
+
+```bash
+# 0. On BOTH nodes: pull the GB10-native image (FULL graph replay works here;
+#    the stock nightly-aarch64 image wedges — see Wall 2)
+docker pull eugr/spark-vllm:latest
+
+# 1. On BOTH nodes: stage the checkpoint (157 GB) at ~/models/dsv4-flash-dspark
+#    and copy this repo's scripts/ + patches/eugr-graphs/ into ~/dsv4-025-patches/
+mkdir -p ~/dsv4-025-patches && cp patches/eugr-graphs/* ~/dsv4-025-patches/
+
+# 2. Worker node (rank 1) FIRST, then head node (rank 0, OpenAI API on :8000):
+IMG=eugr/spark-vllm:latest SPEC=dspark EAGER=0 PATCH_DSPARK_EUGR=1 GMU=0.82 SEQS=12 \
+  bash scripts/dsv4-025-serve-r34-mod.sh 1   # worker
+IMG=eugr/spark-vllm:latest SPEC=dspark EAGER=0 PATCH_DSPARK_EUGR=1 GMU=0.82 SEQS=12 \
+  bash scripts/dsv4-025-serve-r34-mod.sh 0   # head
+```
+
+Three mounted files make it work (`patches/eugr-graphs/`): the Wall-1 SWA width-pad rebased
+onto this image's sources, and two graph-safety clamps that stop the sequential Markov draft
+from feeding pad-row ids into an embedding gather under graph replay (the `[-1]` corruption).
+`GMU=0.82`, not 0.85 — FULL+PIECEWISE capture needs ~3.5 GB headroom on 128 GB unified;
+0.85 gets the rank SIGKILLed mid-capture. Adjust `MASTER`/`IF`/`HCA` in the launcher to your
+fabric (ours: 200G RoCE, NCCL IB GID 3).
+
+![Concurrency scaling](charts/concurrency-scaling.png)
+![Acceptance ledger](charts/acceptance-ledger.png)
+
+## The optimization ledger (what was tried, with verdicts)
 
 > **2026-07-09 CHAMPION CONFIG — graphs unlocked.** The sm_121a graph-replay wedge (Wall 2)
 > turned out to be the **upstream nightly image's GB10 binaries**, not vLLM code: the same vLLM
